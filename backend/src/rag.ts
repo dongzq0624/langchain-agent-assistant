@@ -7,11 +7,12 @@ import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
 import { ChatOpenAI, OpenAIEmbeddings } from '@langchain/openai';
 import { ChatPromptTemplate } from '@langchain/core/prompts';
 
-config();
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const PDF_DIR = path.resolve(__dirname, '../pdfs');
+config({ path: path.resolve(__dirname, '../.env') });
+const backendPdfs = path.resolve(__dirname, '../pdfs');
+const rootPdfs = path.resolve(__dirname, '../pdfs');
+const PDF_DIR = fs.existsSync(backendPdfs) ? backendPdfs : rootPdfs;
 const TOP_K = 3;
 const MAX_HISTORY = 8;
 
@@ -229,7 +230,7 @@ export async function initializeKnowledgeBase() {
   await initializationPromise;
 }
 
-export async function askAssistant(question: string, history: ChatMessage[] = []): Promise<ChatResult> {
+export async function askAssistant(question: string, history: ChatMessage[] = []) {
   await initializeKnowledgeBase();
 
   const relevantChunks = await retrieveRelevantChunks(question);
