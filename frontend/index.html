@@ -3,8 +3,33 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AI 入职助手</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="description" content="基于企业 PDF 知识库的 AI 入职助手，使用 RAG 检索和大模型生成回答" />
+    <meta name="theme-color" content="#4f46e5" id="meta-theme-color" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <title>AI 入职助手 - 企业知识库智能问答</title>
+    <script>
+      // Prevent theme flash — read stored theme before first paint
+      (function() {
+        var stored = localStorage.getItem('theme');
+        var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        var theme = stored || (prefersDark ? 'dark' : 'light');
+        if (theme === 'dark') {
+          document.documentElement.setAttribute('data-theme', 'dark');
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (meta) meta.setAttribute('content', '#0f0f23');
+        }
+      })();
+    </script>
+    <style>
+      body { margin: 0; background: linear-gradient(135deg, #eef2ff 0%, #faf5ff 50%, #f0fdf4 100%); min-height: 100vh; }
+      [data-theme="dark"] body { background: linear-gradient(135deg, #0f0f23 0%, #1a0f2e 50%, #0f1f2e 100%); }
+      #app { min-height: 100vh; display: flex; align-items: center; }
+      .page-shell { min-height: calc(100vh - 48px); }
+      @media (max-width: 960px) { #app { align-items: stretch; } .page-shell { min-height: auto; } }
+    </style>
   </head>
   <body>
     <div id="app"></div>

@@ -9,6 +9,11 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:3000',
         changeOrigin: true,
+        bypass(req, res) {
+          if (req.url?.includes('/stream') && res) {
+            res.setHeader('X-Accel-Buffering', 'no')
+          }
+        },
       },
     },
   },

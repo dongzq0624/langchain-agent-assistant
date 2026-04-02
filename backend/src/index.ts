@@ -3,7 +3,7 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 import express from 'express';
 import cors from 'cors';
-import { askAssistant, initializeKnowledgeBase, type ChatMessage } from './rag.js';
+import { askAssistant, askAssistantStream, initializeKnowledgeBase, getSettings, updateSettings, type ChatMessage } from './rag.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -18,6 +18,21 @@ app.use(express.json({ limit: '1mb' }));
 
 app.get('/api/health', (_request, response) => {
   response.json({ status: 'ok' });
+});
+
+app.get('/api/settings', (_request, response) => {
+  response.json(getSettings());
+});
+
+app.put('/api/settings', (request, response) => {
+  try {
+    const newSettings = request.body;
+    const updated = updateSettings(newSettings);
+    response.json(updated);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '设置更新失败';
+    response.status(400).json({ message });
+  }
 });
 
 app.post('/api/chat', async (request, response) => {
@@ -35,6 +50,39 @@ app.post('/api/chat', async (request, response) => {
   } catch (error) {
     const message = error instanceof Error ? error.message : '服务内部异常';
     response.status(500).json({ message });
+  }
+});
+
+app.post('/api/chat/stream', async (request, response) => {
+  const question = typeof request.body?.question === 'string' ? request.body.question.trim() : '';
+  const history = Array.isArray(request.body?.history) ? (request.body.history as ChatMessage[]) : [];
+
+  if (!question) {
+    response.status(400).json({ message: 'question 不能为空' });
+    return;
+  }
+
+  response.setHeader('Content-Type', 'text/event-stream');
+  response.setHeader('Cache-Control', 'no-cache');
+  response.setHeader('Connection', 'keep-alive');
+  response.setHeader('X-Accel-Buffering', 'no');
+
+  const sendEvent = (event: string, data: unknown) => {
+    response.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+
+  try {
+    await askAssistantStream(question, history, (chunk) => {
+      sendEvent('chunk', { content: chunk });
+    }, (sources) => {
+      sendEvent('sources', { sources });
+    });
+    response.write('event: done\ndata: {}\n\n');
+    response.end();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '服务内部异常';
+    response.write(`event: error\ndata: ${JSON.stringify({ message })}\n\n`);
+    response.end();
   }
 });
 

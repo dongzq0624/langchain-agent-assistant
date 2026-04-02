@@ -16,13 +16,69 @@ const PDF_DIR = fs.existsSync(backendPdfs) ? backendPdfs : rootPdfs;
 const TOP_K = 3;
 const MAX_HISTORY = 8;
 
-const llm = new ChatOpenAI({
-  apiKey: process.env.DEEPSEEK_API_KEY,
-  model: process.env.DEEPSEEK_MODEL,
-  temperature: 0.01,
-  maxTokens: 1000,
-  configuration: { baseURL: process.env.DEEPSEEK_BASE_URL },
-});
+export interface ModelConfig {
+  provider: 'deepseek' | 'openai' | 'zhipu' | 'siliconflow';
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+  temperature: number;
+  maxTokens: number;
+}
+
+export interface AppSettings {
+  model: ModelConfig;
+  retrievalMode: 'embedding' | 'keyword';
+  topK: number;
+}
+
+const defaultSettings: AppSettings = {
+  model: {
+    provider: 'deepseek',
+    apiKey: process.env.DEEPSEEK_API_KEY || '',
+    baseUrl: process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com',
+    model: process.env.DEEPSEEK_MODEL || 'deepseek-chat',
+    temperature: 0.7,
+    maxTokens: 1000,
+  },
+  retrievalMode: 'keyword',
+  topK: TOP_K,
+};
+
+let settings: AppSettings = { ...defaultSettings };
+
+if (process.env.DEEPSEEK_API_KEY) {
+  settings.model.apiKey = process.env.DEEPSEEK_API_KEY;
+}
+if (process.env.DEEPSEEK_BASE_URL) {
+  settings.model.baseUrl = process.env.DEEPSEEK_BASE_URL;
+}
+if (process.env.DEEPSEEK_MODEL) {
+  settings.model.model = process.env.DEEPSEEK_MODEL;
+}
+
+export function getSettings(): AppSettings {
+  return settings;
+}
+
+export function updateSettings(newSettings: Partial<AppSettings>): AppSettings {
+  settings = { ...settings, ...newSettings };
+  if (newSettings.model) {
+    settings.model = { ...settings.model, ...newSettings.model };
+  }
+  return settings;
+}
+
+function createLLM() {
+  const { apiKey, baseUrl, model, temperature, maxTokens } = settings.model;
+  return new ChatOpenAI({
+    apiKey,
+    model,
+    temperature,
+    maxTokens,
+    configuration: { baseURL: baseUrl },
+    streaming: true,
+  });
+}
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
@@ -197,6 +253,8 @@ async function retrieveRelevantChunks(question: string) {
     return [];
   }
 
+  const topK = settings.topK || TOP_K;
+
   if (retrievalMode === 'embedding' && embeddingsModel) {
     const queryVector = await embeddingsModel.embedQuery(question);
     return [...knowledgeBase]
@@ -205,7 +263,7 @@ async function retrieveRelevantChunks(question: string) {
         score: chunk.embedding ? cosineSimilarity(queryVector, chunk.embedding) : 0,
       }))
       .sort((left, right) => right.score - left.score)
-      .slice(0, TOP_K)
+      .slice(0, topK)
       .filter(item => item.score > 0)
       .map(item => item.chunk);
   }
@@ -217,7 +275,7 @@ async function retrieveRelevantChunks(question: string) {
       score: keywordSimilarity(questionTokens, chunk.tokens),
     }))
     .sort((left, right) => right.score - left.score)
-    .slice(0, TOP_K)
+    .slice(0, topK)
     .filter(item => item.score > 0)
     .map(item => item.chunk);
 }
@@ -257,6 +315,7 @@ export async function askAssistant(question: string, history: ChatMessage[] = []
     question,
   });
 
+  const llm = createLLM();
   const response = await llm.invoke(formattedPrompt);
   const answer = typeof response.content === 'string' ? response.content : JSON.stringify(response.content);
 
@@ -269,4 +328,55 @@ export async function askAssistant(question: string, history: ChatMessage[] = []
       preview: chunk.content.slice(0, 180),
     })),
   };
+}
+
+export async function askAssistantStream(
+  question: string,
+  history: ChatMessage[] = [],
+  onChunk: (chunk: string) => void,
+  onSources?: (sources: ChatSource[]) => void,
+) {
+  await initializeKnowledgeBase();
+
+  const relevantChunks = await retrieveRelevantChunks(question);
+  const context = relevantChunks.length
+    ? relevantChunks
+        .map((chunk, index) => `资料 ${index + 1}（${formatSource(chunk)}）\n${chunk.content}`)
+        .join('\n\n')
+    : '未检索到相关资料。';
+
+  if (onSources) {
+    onSources(relevantChunks.map(chunk => ({
+      source: chunk.source,
+      page: chunk.page,
+      preview: chunk.content.slice(0, 180),
+    })));
+  }
+
+  const prompt = ChatPromptTemplate.fromMessages([
+    [
+      'system',
+      '你是专业的企业入职助手。请优先依据检索结果回答问题，不要编造制度、流程或福利信息。如果检索结果不足以回答，请明确说明未在知识库中找到相关内容。回答保持简洁准确。',
+    ],
+    [
+      'human',
+      '历史对话：\n{history}\n\n检索结果：\n{context}\n\n当前问题：\n{question}',
+    ],
+  ]);
+
+  const formattedPrompt = await prompt.invoke({
+    history: formatHistory(normalizeHistory(history)),
+    context,
+    question,
+  });
+
+  const llm = createLLM();
+  const stream = await llm.stream(formattedPrompt);
+
+  for await (const chunk of stream) {
+    const text = typeof chunk.content === 'string' ? chunk.content : '';
+    if (text) {
+      onChunk(text);
+    }
+  }
 }
