@@ -34,7 +34,7 @@ export interface AppSettings {
 const defaultSettings: AppSettings = {
   model: {
     provider: 'deepseek',
-    apiKey: process.env.DEEPSEEK_API_KEY || '',
+    apiKey: process.env.DEEPSEEK_API_KEY || 'sk-7b1b2d1fc68c4a9599d6aad7c8944329',
     baseUrl: process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com',
     model: process.env.DEEPSEEK_MODEL || 'deepseek-chat',
     temperature: 0.7,
@@ -70,14 +70,44 @@ export function updateSettings(newSettings: Partial<AppSettings>): AppSettings {
 
 function createLLM() {
   const { apiKey, baseUrl, model, temperature, maxTokens } = settings.model;
+  // 去掉 baseUrl 末尾的斜杠，防止路径变成 //v1/chat/completions
+  const cleanBaseUrl = baseUrl.replace(/\/$/, '');
   return new ChatOpenAI({
     apiKey,
     model,
     temperature,
     maxTokens,
-    configuration: { baseURL: baseUrl },
+    configuration: { baseURL: cleanBaseUrl },
     streaming: true,
   });
+}
+
+/** OpenAI / DeepSeek 流式 chunk 的 content 可能是 string，也可能是 LangChain 的文本块数组 */
+function extractStreamChunkText(chunk: unknown): string {
+  if (!chunk || typeof chunk !== 'object') return '';
+  const o = chunk as { content?: unknown; additional_kwargs?: Record<string, unknown> };
+
+  const fromContent = (c: unknown): string => {
+    if (typeof c === 'string') return c;
+    if (!Array.isArray(c)) return '';
+    return c
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (part && typeof part === 'object') {
+          const p = part as { type?: string; text?: string };
+          if (p.type === 'text' && typeof p.text === 'string') return p.text;
+        }
+        return '';
+      })
+      .join('');
+  };
+
+  let text = fromContent(o.content);
+  const reasoning = o.additional_kwargs?.reasoning_content;
+  if (!text && typeof reasoning === 'string') {
+    text = reasoning;
+  }
+  return text;
 }
 
 export interface ChatMessage {
@@ -374,7 +404,7 @@ export async function askAssistantStream(
   const stream = await llm.stream(formattedPrompt);
 
   for await (const chunk of stream) {
-    const text = typeof chunk.content === 'string' ? chunk.content : '';
+    const text = extractStreamChunkText(chunk);
     if (text) {
       onChunk(text);
     }

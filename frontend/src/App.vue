@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, nextTick, watch, onMounted } from 'vue'
 
+// 后端 API 地址（生产环境从环境变量读取，开发环境走 vite proxy）
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? ''
+
 type Role = 'user' | 'assistant'
 
 interface SourceItem {
@@ -122,7 +125,7 @@ onMounted(() => {
 
 async function loadSettings() {
   try {
-    const res = await fetch('/api/settings')
+    const res = await fetch(`${API_BASE}/api/settings`)
     if (res.ok) {
       const data = await res.json()
       settings.value = data
@@ -135,7 +138,7 @@ async function loadSettings() {
 async function saveSettings() {
   settingsLoading.value = true
   try {
-    const res = await fetch('/api/settings', {
+    const res = await fetch(`${API_BASE}/api/settings`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(settings.value),
@@ -222,7 +225,7 @@ async function sendQuestion(customQuestion?: string) {
   messages.value.push(assistantMessage.value)
 
   try {
-    const response = await fetch('/api/chat/stream', {
+    const response = await fetch(`${API_BASE}/api/chat/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ question: text, history: conversationHistory.value }),
@@ -281,7 +284,18 @@ async function sendQuestion(customQuestion?: string) {
             // ignore
           }
         } else if (eventType === 'error') {
-          throw new Error('服务异常')
+          let errMsg = '服务异常'
+          if (data) {
+            try {
+              const parsed = JSON.parse(data) as { message?: string }
+              if (typeof parsed.message === 'string' && parsed.message.length > 0) {
+                errMsg = parsed.message
+              }
+            } catch {
+              /* 使用默认文案 */
+            }
+          }
+          throw new Error(errMsg)
         }
       }
     }

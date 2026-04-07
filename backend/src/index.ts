@@ -81,6 +81,7 @@ app.post('/api/chat/stream', async (request, response) => {
     response.end();
   } catch (error) {
     const message = error instanceof Error ? error.message : '服务内部异常';
+    console.error('[api/chat/stream]', error);
     response.write(`event: error\ndata: ${JSON.stringify({ message })}\n\n`);
     response.end();
   }
