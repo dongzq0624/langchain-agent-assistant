@@ -79,3 +79,158 @@ jobs:
         run: pnpm test || echo "No tests configured"
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+
+  # 部署到生产环境
+  deploy:
+    needs: [build-frontend, test-backend]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    
+    environment: 
+      name: production
+      url: http://101.37.236.214
+    
+    concurrency: 
+      group: production-deploy
+      cancel-in-progress: false
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download frontend build
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-build
+          path: frontend/dist
+          
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.ECS_SSH_KEY }}
+          
+      - name: Verify server connection
+        run: |
+          ssh -o StrictHostKeyChecking=no root@101.37.236.214 "echo '✅ Server connection successful'"
+          
+      - name: Backup current deployment
+        run: |
+          ssh root@101.37.236.214 << 'EOF'
+            cd /opt/backend
+            if [ -d "backup" ]; then
+              rm -rf backup
+            fi
+            mkdir -p backup
+            cp -r src package.json pnpm-lock.yaml tsconfig.json ecosystem.config.cjs backup/ 2>/dev/null || true
+            echo "✅ Backup created"
+          EOF
+          
+      - name: Deploy backend
+        run: |
+          # 上传后端代码和 lock 文件
+          scp -r \
+            ./backend/src \
+            ./backend/package.json \
+            ./backend/pnpm-lock.yaml \
+            ./backend/tsconfig.json \
+            ./backend/ecosystem.config.cjs \
+            root@101.37.236.214:/opt/backend/
+          
+          # 登录服务器并部署
+          ssh root@101.37.236.214 << 'EOF'
+            cd /opt/backend
+            
+            # 确保安装了 pnpm
+            which pnpm || npm install -g pnpm
+            
+            # 使用 pnpm 安装依赖（严格模式，使用 lock 文件）
+            pnpm install --frozen-lockfile
+            
+            # 重启服务
+            pm2 reload ai-onboarding || pm2 start ecosystem.config.cjs
+            
+            # 等待服务启动
+            sleep 5
+            
+            # 验证服务状态
+            pm2 status ai-onboarding
+          EOF
+          
+      - name: Deploy frontend
+        run: |
+          # 备份当前版本
+          ssh root@101.37.236.214 << 'EOF'
+            if [ -d "/var/www/ai-onboarding" ]; then
+              mv /var/www/ai-onboarding /var/www/ai-onboarding.bak
+            fi
+            mkdir -p /var/www/ai-onboarding
+          EOF
+          
+          # 上传前端构建文件
+          scp -r ./frontend/dist/* root@101.37.236.214:/var/www/ai-onboarding/
+          
+          # 清理备份并重载 Nginx
+          ssh root@101.37.236.214 << 'EOF'
+            rm -rf /var/www/ai-onboarding.bak
+            systemctl reload nginx
+          EOF
+          
+      - name: Health check
+        run: |
+          echo "⏳ Waiting for service to be ready..."
+          sleep 10
+          
+          # 检查健康端点
+          if curl -f http://101.37.236.214/health; then
+            echo "✅ Health check passed"
+          else
+            echo "⚠️ Health endpoint not available, checking main page..."
+            curl -f http://101.37.236.214/ || exit 1
+          fi
+          
+      - name: Output deployment information
+        run: |
+          echo ""
+          echo "╔═══════════════════════════════════════════════════════════╗"
+          echo "║                                                           ║"
+          echo "║              🎉 部署成功！                                 ║"
+          echo "║                                                           ║"
+          echo "╚═══════════════════════════════════════════════════════════╝"
+          echo ""
+          echo "📍 部署信息："
+          echo "   • 应用地址: http://101.37.236.214"
+          echo "   • API 地址: http://101.37.236.214/api"
+          echo "   • 提交哈希: ${{ github.sha }}"
+          echo "   • 分支: ${{ github.ref_name }}"
+          echo "   • 触发者: ${{ github.actor }}"
+          echo "   • 部署时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo ""
+          echo "🔗 快速访问："
+          echo "   • 首页: http://101.37.236.214"
+          echo "   • 健康检查: http://101.37.236.214/health"
+          echo ""
+          echo "📊 监控命令："
+          echo "   • 查看后端日志: ssh root@101.37.236.214 'pm2 logs ai-onboarding'"
+          echo "   • 查看服务状态: ssh root@101.37.236.214 'pm2 status'"
+          echo "   • 查看 Nginx 日志: ssh root@101.37.236.214 'tail -f /var/log/nginx/ai-onboarding-error.log'"
+          echo ""
+          
+      - name: Notify deployment success
+        if: success()
+        run: |
+          echo "✅ 部署成功完成！"
+          echo "🌐 访问地址: http://101.37.236.214"
+        
+      - name: Notify deployment failure
+        if: failure()
+        run: |
+          echo "❌ 部署失败！"
+          echo ""
+          echo "🔍 故障排查步骤："
+          echo "   1. 查看 GitHub Actions 完整日志"
+          echo "   2. 检查服务器状态: ssh root@101.37.236.214 'pm2 status'"
+          echo "   3. 查看后端日志: ssh root@101.37.236.214 'pm2 logs ai-onboarding --err'"
+          echo "   4. 查看 Nginx 错误: ssh root@101.37.236.214 'tail -50 /var/log/nginx/ai-onboarding-error.log'"
+          echo ""
+          echo "🔄 回滚操作："
+          echo "   ssh root@101.37.236.214 'cd /opt/backend && cp -r backup/* . && pnpm install --frozen-lockfile && pm2 restart ai-onboarding'"
+          exit 1
