@@ -108,9 +108,54 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.ECS_SSH_KEY }}
           
+      - name: Debug SSH configuration
+        run: |
+          echo "Testing SSH connectivity..."
+          echo "Server: 101.37.236.214"
+          echo "User: root"
+          echo ""
+          
+          # 检查 SSH 代理
+          echo "SSH_AUTH_SOCK: $SSH_AUTH_SOCK"
+          ssh-add -l || echo "No keys in agent"
+          echo ""
+          
+          # 测试连接（详细模式）
+          echo "Attempting SSH connection..."
+          ssh -v -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@101.37.236.214 "echo 'Connection successful'; whoami; hostname" || {
+            echo "❌ SSH connection failed!"
+            echo ""
+            echo "可能的原因："
+            echo "1. SSH 密钥未正确配置到 GitHub Secrets (ECS_SSH_KEY)"
+            echo "2. 服务器防火墙阻止了 SSH 连接（端口 22）"
+            echo "3. 服务器 IP 地址变更"
+            echo "4. SSH 服务未运行"
+            echo ""
+            echo "排查步骤："
+            echo "1. 验证 GitHub Secret 'ECS_SSH_KEY' 包含完整的私钥"
+            echo "2. 本地测试: ssh -i your-key.pem root@101.37.236.214"
+            echo "3. 检查阿里云安全组是否开放端口 22"
+            exit 1
+          }
+          
       - name: Verify server connection
         run: |
-          ssh -o StrictHostKeyChecking=no root@101.37.236.214 "echo '✅ Server connection successful'"
+          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30 root@101.37.236.214 << 'EOF'
+            echo "✅ Server connection verified"
+            echo "Hostname: $(hostname)"
+            echo "Uptime: $(uptime)"
+            echo "Disk usage:"
+            df -h / | tail -1
+            echo ""
+            echo "Node.js version:"
+            node --version || echo "Node.js not installed"
+            echo ""
+            echo "pnpm version:"
+            pnpm --version || echo "pnpm not installed"
+            echo ""
+            echo "PM2 status:"
+            pm2 list || echo "PM2 not running"
+          EOF
           
       - name: Backup current deployment
         run: |
@@ -126,53 +171,114 @@ jobs:
           
       - name: Deploy backend
         run: |
+          echo "📦 Uploading backend files..."
+          
           # 上传后端代码和 lock 文件
-          scp -r \
+          scp -o StrictHostKeyChecking=no \
+            -r \
             ./backend/src \
             ./backend/package.json \
             ./backend/pnpm-lock.yaml \
             ./backend/tsconfig.json \
             ./backend/ecosystem.config.cjs \
-            root@101.37.236.214:/opt/backend/
+            root@101.37.236.214:/opt/backend/ || {
+            echo "❌ Failed to upload backend files"
+            exit 1
+          }
+          
+          echo "✅ Backend files uploaded successfully"
+          echo ""
+          echo "🚀 Deploying backend..."
           
           # 登录服务器并部署
-          ssh root@101.37.236.214 << 'EOF'
+          ssh -o StrictHostKeyChecking=no root@101.37.236.214 << 'EOF'
+            set -e  # 遇到错误立即退出
+            
             cd /opt/backend
             
+            echo "Step 1: Ensuring pnpm is installed..."
             # 确保安装了 pnpm
-            which pnpm || npm install -g pnpm
+            if ! command -v pnpm &> /dev/null; then
+              echo "Installing pnpm..."
+              npm install -g pnpm@latest
+            else
+              echo "pnpm is already installed: $(pnpm --version)"
+            fi
             
+            echo ""
+            echo "Step 2: Installing dependencies..."
             # 使用 pnpm 安装依赖（严格模式，使用 lock 文件）
             pnpm install --frozen-lockfile
             
+            echo ""
+            echo "Step 3: Restarting service..."
             # 重启服务
-            pm2 reload ai-onboarding || pm2 start ecosystem.config.cjs
+            if pm2 list | grep -q "ai-onboarding"; then
+              pm2 reload ai-onboarding
+            else
+              pm2 start ecosystem.config.cjs
+            fi
             
             # 等待服务启动
+            echo "Waiting for service to start..."
             sleep 5
             
             # 验证服务状态
+            echo ""
+            echo "Step 4: Verifying service status..."
             pm2 status ai-onboarding
+            
+            # 检查进程是否在运行
+            if pm2 list | grep "ai-onboarding" | grep -q "online"; then
+              echo "✅ Backend service is running"
+            else
+              echo "❌ Backend service failed to start"
+              pm2 logs ai-onboarding --err --lines 20
+              exit 1
+            fi
           EOF
+          
+          echo "✅ Backend deployment completed"
           
       - name: Deploy frontend
         run: |
+          echo "📦 Deploying frontend..."
+          
           # 备份当前版本
-          ssh root@101.37.236.214 << 'EOF'
+          ssh -o StrictHostKeyChecking=no root@101.37.236.214 << 'EOF'
             if [ -d "/var/www/ai-onboarding" ]; then
-              mv /var/www/ai-onboarding /var/www/ai-onboarding.bak
+              echo "Backing up current frontend..."
+              mv /var/www/ai-onboarding /var/www/ai-onboarding.bak.$(date +%Y%m%d_%H%M%S)
             fi
             mkdir -p /var/www/ai-onboarding
+            echo "✅ Frontend directory ready"
           EOF
           
+          echo "Uploading frontend files..."
           # 上传前端构建文件
-          scp -r ./frontend/dist/* root@101.37.236.214:/var/www/ai-onboarding/
+          scp -o StrictHostKeyChecking=no \
+            -r \
+            ./frontend/dist/* \
+            root@101.37.236.214:/var/www/ai-onboarding/ || {
+            echo "❌ Failed to upload frontend files"
+            exit 1
+          }
           
-          # 清理备份并重载 Nginx
-          ssh root@101.37.236.214 << 'EOF'
-            rm -rf /var/www/ai-onboarding.bak
-            systemctl reload nginx
+          echo "✅ Frontend files uploaded"
+          echo ""
+          echo "Reloading Nginx..."
+          
+          # 重载 Nginx
+          ssh -o StrictHostKeyChecking=no root@101.37.236.214 << 'EOF'
+            systemctl reload nginx || {
+              echo "❌ Failed to reload Nginx"
+              systemctl status nginx
+              exit 1
+            }
+            echo "✅ Nginx reloaded successfully"
           EOF
+          
+          echo "✅ Frontend deployment completed"
           
       - name: Health check
         run: |
