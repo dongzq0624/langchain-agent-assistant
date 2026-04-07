@@ -1,6 +1,8 @@
 # CI/CD 部署设置指南
 
 > 本指南详细介绍如何配置和使用自动化 CI/CD 流水线部署 AI 入职助手项目。
+> 
+> **⚠️ 重要提示**：本项目强制使用 **pnpm** 作为包管理器。请勿使用 npm 或 yarn 安装依赖。
 
 ## 📋 目录
 
@@ -32,7 +34,7 @@
 
 ### 1.2 生成 SSH 密钥对
 
-```bash
+``bash
 # 在本地机器上生成 SSH 密钥对
 ssh-keygen -t ed25519 -C "github-actions@ai-onboarding" -f ~/.ssh/github-actions
 
@@ -73,9 +75,12 @@ sudo apt install -y nodejs npm nginx git curl wget
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt install -y nodejs
 
+# 全局安装 pnpm（项目强制使用 pnpm）
+sudo npm install -g pnpm
+
 # 验证安装
 node --version  # 应显示 v20.x.x
-npm --version   # 应显示 10.x.x
+pnpm --version  # 应显示 10.x.x
 ```
 
 #### CentOS/RHEL
@@ -92,13 +97,16 @@ sudo yum install -y nodejs npm nginx git curl wget
 # 安装 Node.js 20.x
 curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash -
 sudo yum install -y nodejs
+
+# 全局安装 pnpm（项目强制使用 pnpm）
+sudo npm install -g pnpm
 ```
 
 ### 2.3 安装 PM2 进程管理器
 
-```bash
-# 全局安装 PM2 和 TypeScript
-sudo npm install -g pm2 tsx typescript
+``bash
+# 全局安装 PM2、pnpm 和 TypeScript
+sudo npm install -g pm2 pnpm tsx typescript
 
 # 设置 PM2 开机自启
 pm2 startup systemd
@@ -106,11 +114,12 @@ sudo env PATH=$PATH:/usr/bin pm2 startup systemd -u root --hp /root
 
 # 验证安装
 pm2 --version
+pnpm --version
 ```
 
 ### 2.4 创建目录结构
 
-```bash
+``bash
 # 创建后端目录
 sudo mkdir -p /opt/backend/pdfs
 sudo chown -R $USER:$USER /opt/backend
@@ -153,7 +162,7 @@ sudo nano /etc/nginx/sites-available/ai-onboarding
 
 粘贴以下内容：
 
-```nginx
+``nginx
 server {
     listen 80;
     server_name your-domain.com;  # 替换为你的域名或 _
@@ -280,7 +289,7 @@ sudo nano /opt/backend/.env
 
 粘贴以下内容（根据实际情况修改）：
 
-```env
+``env
 # ==================== 服务配置 ====================
 PORT=3000
 HOST=0.0.0.0
@@ -410,7 +419,7 @@ sudo chown -R $USER:$USER /var/log/ai-onboarding
 
 确认 `.gitignore` 包含以下内容：
 
-```gitignore
+```
 # 依赖
 node_modules/
 
@@ -452,7 +461,7 @@ Thumbs.db
 
 ### 4.2 工作流程步骤
 
-```mermaid
+```
 graph LR
     A[代码推送] --> B{分支判断}
     B -->|main/master| C[前端构建]
@@ -469,7 +478,7 @@ graph LR
 
 如果需要自定义部署逻辑，编辑 `.github/workflows/ci-cd.yml`：
 
-```yaml
+```
 name: CI/CD Pipeline
 
 on:
@@ -651,7 +660,7 @@ jobs:
 
 ### 4.4 部署触发
 
-```bash
+```
 # 推送代码触发自动部署
 git add .
 git commit -m "feat: 添加新功能"
@@ -667,7 +676,7 @@ git push origin main
 
 ### 5.1 使用部署脚本
 
-```bash
+```
 # 给脚本添加执行权限
 chmod +x deploy.sh
 
@@ -678,7 +687,7 @@ chmod +x deploy.sh
 ### 5.2 分步手动部署
 
 #### 后端部署
-```bash
+```
 # 1. 上传代码
 scp -r ./backend/src/* \
   ./backend/package.json \
@@ -701,7 +710,7 @@ pm2 logs ai-onboarding --lines 50
 ```
 
 #### 前端部署
-```bash
+```
 # 1. 本地构建
 cd frontend
 npm run build
@@ -715,7 +724,7 @@ ssh root@YOUR_SERVER_IP "systemctl reload nginx"
 
 ### 5.3 回滚操作
 
-```bash
+```
 # 后端回滚
 ssh root@YOUR_SERVER_IP << 'EOF'
   cd /opt/backend
@@ -742,7 +751,7 @@ EOF
 
 ### 6.1 PM2 监控
 
-```bash
+```
 # 查看所有服务状态
 pm2 status
 
@@ -765,7 +774,7 @@ pm2 flush
 
 ### 6.2 Nginx 日志
 
-```bash
+```
 # 查看访问日志
 tail -f /var/log/nginx/ai-onboarding-access.log
 
@@ -778,7 +787,7 @@ awk '{print $1}' /var/log/nginx/ai-onboarding-access.log | sort | uniq -c | sort
 
 ### 6.3 系统监控
 
-```bash
+```
 # 查看系统资源
 htop
 
@@ -797,7 +806,7 @@ netstat -tulpn | grep :80
 
 使用 PM2 Plus 或其他监控服务：
 
-```bash
+```
 # 注册 PM2 Plus
 pm2 plus
 
@@ -921,7 +930,7 @@ pm2 env ai-onboarding
 
 ### 7.2 调试技巧
 
-```bash
+```
 # 启用详细日志
 export DEBUG=*
 pm2 restart ai-onboarding
@@ -942,7 +951,7 @@ which node
 
 ### 7.3 性能优化
 
-```bash
+```
 # 1. 启用 Gzip
 # 已在 Nginx 配置中启用
 
@@ -1075,7 +1084,7 @@ jobs:
 
 ### 9.2 蓝绿部署
 
-```bash
+```
 # 1. 准备两个相同的环境
 # /opt/backend-blue
 # /opt/backend-green
@@ -1094,7 +1103,7 @@ curl http://SERVER:3001/api/health
 
 创建 `Dockerfile`：
 
-```dockerfile
+```
 # Backend Dockerfile
 FROM node:20-alpine
 
@@ -1112,7 +1121,7 @@ CMD ["npx", "tsx", "src/index.ts"]
 
 创建 `docker-compose.yml`：
 
-```yaml
+```
 version: '3.8'
 
 services:
@@ -1139,7 +1148,7 @@ services:
 
 #### Prometheus + Grafana
 
-```bash
+```
 # 安装 PM2 Prometheus 模块
 pm2 install pm2-prometheus
 
@@ -1153,7 +1162,7 @@ scrape_configs:
 
 ### 9.5 CI/CD 优化
 
-```yaml
+```
 # 使用缓存加速构建
 - name: Cache dependencies
   uses: actions/cache@v3
@@ -1177,7 +1186,7 @@ strategy:
 
 ### 常用命令速查表
 
-```bash
+```
 # === PM2 ===
 pm2 status                    # 查看状态
 pm2 logs ai-onboarding        # 查看日志
